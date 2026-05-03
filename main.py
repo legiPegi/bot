@@ -14,7 +14,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
 
-bot = telebot.TeleBot(BOT_TOKEN, num_workers=4, skip_pending=True)
+# Oddiy format - qo'shimcha parametrlarsiz
+bot = telebot.TeleBot(BOT_TOKEN)
 DATA_FILE = "ishlar.json"
 
 # ===== KESH MA'LUMOTLAR =====
@@ -53,7 +54,7 @@ def yangi_id_yaratish(data):
             data["ishlatilgan_idlar"] = list(ishlatilgan)
             return yangi
 
-# ===== QR KOD YARATISH (OPTIMALLASHTIRILGAN) =====
+# ===== QR KOD YARATISH =====
 def qr_yaratish(ish):
     matn = (
         f"ID: {ish['id']}\n"
@@ -73,7 +74,7 @@ def qr_yaratish(ish):
     buf.seek(0)
     return buf
 
-# ===== EXCEL HISOBOT YARATISH (OPTIMALLASHTIRILGAN) =====
+# ===== EXCEL HISOBOT YARATISH =====
 def excel_hisobot_yaratish(ishlar, sarlavha):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -167,13 +168,18 @@ def send_document_and_save(chat_id, document, visible_file_name, caption=None, r
         print(f"Fayl yuborish xatosi: {e}")
         return None
 
-def delete_messages(chat_id, message_ids):
-    """Bir nechta xabarni o'chirish"""
-    for msg_id in message_ids:
-        try:
-            bot.delete_message(chat_id, msg_id)
-        except:
-            pass
+def delete_messages_async(chat_id, message_ids):
+    """Xabarlarni asinxron o'chirish"""
+    if not message_ids:
+        return
+    def delete():
+        for msg_id in message_ids:
+            try:
+                bot.delete_message(chat_id, msg_id)
+                time.sleep(0.05)  # Rate limit uchun kichik pauza
+            except:
+                pass
+    threading.Thread(target=delete, daemon=True).start()
 
 def clear_chat_history(chat_id, keep_hisobot=False):
     """Chat tarixini tozalash"""
@@ -181,21 +187,26 @@ def clear_chat_history(chat_id, keep_hisobot=False):
         return
     
     state = user_states[chat_id]
+    
+    # Hisobot rejimida tarixni tozalamaslik
     if keep_hisobot and state.get("hisobot_mode"):
         return
     
     if "message_ids" in state and state["message_ids"]:
         message_ids = state["message_ids"].copy()
         state["message_ids"] = []
-        # Xabarlarni birdaniga o'chirish uchun thread
-        threading.Thread(target=delete_messages, args=(chat_id, message_ids), daemon=True).start()
+        delete_messages_async(chat_id, message_ids)
 
 def delete_message_later(chat_id, message_id, delay=0):
     """Xabarni kechikish bilan o'chirish"""
     if delay > 0:
-        timer = threading.Timer(delay, lambda: bot.delete_message(chat_id, message_id) if True else None)
-        timer.daemon = True
-        timer.start()
+        def delete():
+            time.sleep(delay)
+            try:
+                bot.delete_message(chat_id, message_id)
+            except:
+                pass
+        threading.Thread(target=delete, daemon=True).start()
     else:
         try:
             bot.delete_message(chat_id, message_id)
@@ -204,11 +215,14 @@ def delete_message_later(chat_id, message_id, delay=0):
 
 def delete_multiple_later(chat_id, message_ids, delay=3):
     """Bir nechta xabarni kechikish bilan o'chirish"""
+    if not message_ids:
+        return
     def delete():
         time.sleep(delay)
         for msg_id in message_ids:
             try:
                 bot.delete_message(chat_id, msg_id)
+                time.sleep(0.05)
             except:
                 pass
     threading.Thread(target=delete, daemon=True).start()
@@ -246,7 +260,15 @@ def hisobot_yaratish(ishlar, sarlavha):
     )
 
 def ishlar_sanada(ishlar, bosh, oxir):
-    return [ish for ish in ishlar if bosh <= datetime.strptime(ish["sana"], "%d.%m.%Y %H:%M") <= oxir]
+    natija = []
+    for ish in ishlar:
+        try:
+            sana = datetime.strptime(ish["sana"], "%d.%m.%Y %H:%M")
+            if bosh <= sana <= oxir:
+                natija.append(ish)
+        except:
+            pass
+    return natija
 
 def show_main_menu(chat_id, text="🏠 Asosiy menyu:"):
     """Asosiy menyuni ko'rsatish"""
@@ -532,7 +554,7 @@ def handle_steps(message):
             send_and_save(message.chat.id, "📅 Tugash sanasini kiriting:\nFormat: 31.05.2025")
         except:
             error_msg = send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 01.05.2025")
-            delete_message_later(message.chat.id, error_msg.message_id, 5)
+            delete_message_later(message.chat.id, error_msg.message_id, 3)
 
     elif bosqich == "sana_oxir":
         try:
@@ -557,7 +579,7 @@ def handle_steps(message):
             del user_states[uid]
         except:
             error_msg = send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 31.05.2025")
-            delete_message_later(message.chat.id, error_msg.message_id, 5)
+            delete_message_later(message.chat.id, error_msg.message_id, 3)
 
     elif bosqich == "blok_nomi":
         state["data"]["blok_nomi"] = text
@@ -609,4 +631,6 @@ def handle_steps(message):
 # ===== BOTNI ISHGA TUSHIRISH =====
 if __name__ == "__main__":
     print("Bot ishga tushdi...")
+    # Eski xabarlarni tozalash
+    bot.remove_webhook()
     bot.infinity_polling(timeout=60, long_polling_timeout=30)
