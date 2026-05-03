@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 
-BOT_TOKEN = os.environ.get("8611229526:AAHR4-m-sQpiyCNoyGGdDumR6EoJniVB9VU")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
 
 bot = telebot.TeleBot(BOT_TOKEN)
