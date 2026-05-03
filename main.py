@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 
 BOT_TOKEN = os.environ.get("8611229526:AAHR4-m-sQpiyCNoyGGdDumR6EoJniVB9VU")
-ADMIN_ID = int(os.environ.get("5954825540"))
+ADMIN_ID = int(os.environ.get("ADMIN_ID"))
 
 bot = telebot.TeleBot(BOT_TOKEN)
 DATA_FILE = "mahsulotlar.json"
