@@ -63,7 +63,6 @@ def qr_yaratish(ish):
 
 # ===== EXCEL HISOBOT YARATISH =====
 def excel_hisobot_yaratish(ishlar, sarlavha):
-    """Ishlar ro'yxatidan Excel fayl yaratish"""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Hisobot"
@@ -148,14 +147,11 @@ def hisobot_keyboard():
 user_states = {}
 
 # ===== XABARLARNI TAZALASH FUNKSIYASI =====
-def clear_previous_messages(chat_id, except_message_id=None):
-    """Oldingi xabarlarni tozalash, except_message_id dan tashqari"""
+def clear_previous_messages(chat_id, keep_keyboard=True):
+    """Oldingi xabarlarni tozalash"""
     try:
-        # User_states da saqlangan xabar ID larini o'chirish
         if chat_id in user_states and "message_ids" in user_states[chat_id]:
             for msg_id in user_states[chat_id]["message_ids"]:
-                if except_message_id and msg_id == except_message_id:
-                    continue
                 try:
                     bot.delete_message(chat_id, msg_id)
                 except:
@@ -175,20 +171,17 @@ def add_message_id(chat_id, message_id):
 def send_and_save(chat_id, text, reply_markup=None, parse_mode=None):
     """Xabar yuborish va ID sini saqlash"""
     try:
-        if reply_markup:
-            msg = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-        else:
-            msg = bot.send_message(chat_id, text, parse_mode=parse_mode)
+        msg = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
         add_message_id(chat_id, msg.message_id)
         return msg
     except Exception as e:
         print(f"Xabar yuborish xatosi: {e}")
         return None
 
-def send_photo_and_save(chat_id, photo, caption=None):
+def send_photo_and_save(chat_id, photo, caption=None, reply_markup=None):
     """Rasm yuborish va ID sini saqlash"""
     try:
-        msg = bot.send_photo(chat_id, photo, caption=caption)
+        msg = bot.send_photo(chat_id, photo, caption=caption, reply_markup=reply_markup)
         add_message_id(chat_id, msg.message_id)
         return msg
     except Exception as e:
@@ -250,7 +243,7 @@ def ishlar_sanada(ishlar, bosh, oxir):
 def send_excel_report(message, ishlar, sarlavha):
     """Excel faylni yuborish"""
     if not ishlar:
-        send_and_save(message.chat.id, f"📭 {sarlavha} uchun ma'lumot topilmadi.", reply_markup=hisobot_keyboard())
+        send_and_save(message.chat.id, f"📭 {sarlavha} uchun ma'lumot topilmadi.", reply_markup=main_keyboard())
         return
     try:
         excel_file = excel_hisobot_yaratish(ishlar, sarlavha)
@@ -262,13 +255,12 @@ def send_excel_report(message, ishlar, sarlavha):
             reply_markup=main_keyboard()
         )
     except Exception as e:
-        send_and_save(message.chat.id, f"❌ Excel fayl yaratishda xatolik: {str(e)}", reply_markup=hisobot_keyboard())
+        send_and_save(message.chat.id, f"❌ Excel fayl yaratishda xatolik: {str(e)}", reply_markup=main_keyboard())
 
 # ===== /start =====
 @bot.message_handler(commands=["start"])
 def start(message):
     if message.from_user.id == ADMIN_ID:
-        # Oldingi xabarlarni tozalash
         clear_previous_messages(message.chat.id)
         send_and_save(message.chat.id,
             "👋 Xush kelibsiz!\n\n"
@@ -308,6 +300,8 @@ def barcha_ishlar(message):
             f"💰 Narx: {ish['narx']} so'm\n"
             f"📅 Sana: {ish['sana']}\n"
             f"{holat_emoji} Holat: {ish['holat']}")
+    # Oxirida asosiy menyuni qaytarish
+    send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
 
 # ===== JARAYONDAGI ISHLAR =====
 @bot.message_handler(func=lambda m: m.text == "⏳ Jarayondagi ishlar")
@@ -330,6 +324,7 @@ def jarayondagi_ishlar(message):
             f"💰 Narx: {ish['narx']} so'm\n"
             f"📅 Sana: {ish['sana']}\n"
             f"⏳ Holat: Jarayonda")
+    send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
 
 # ===== ID BO'YICHA QIDIRISH =====
 @bot.message_handler(func=lambda m: m.text == "🔍 ID bo'yicha qidirish")
@@ -397,7 +392,7 @@ def bugungi(message):
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})"), reply_markup=hisobot_keyboard())
+        send_and_save(message.chat.id, hisobot_yaratish(ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})"), reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📆 Haftalik hisobot")
 def haftalik(message):
@@ -411,7 +406,7 @@ def haftalik(message):
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Haftalik hisobot (7 kun)"), reply_markup=hisobot_keyboard())
+        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Haftalik hisobot (7 kun)"), reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "🗓 10 kunlik hisobot")
 def o_nkunlik(message):
@@ -425,7 +420,7 @@ def o_nkunlik(message):
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "10 kunlik hisobot"), reply_markup=hisobot_keyboard())
+        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "10 kunlik hisobot"), reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📝 Oylik hisobot")
 def oylik(message):
@@ -439,7 +434,7 @@ def oylik(message):
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Oylik hisobot (30 kun)"), reply_markup=hisobot_keyboard())
+        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Oylik hisobot (30 kun)"), reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "✏️ Sana kiritish")
 def sana_kiritish(message):
@@ -480,10 +475,10 @@ def handle_steps(message):
                     f"📞 Tel: {ish.get('telefon', '-')}\n"
                     f"💰 Narx: {ish['narx']} so'm\n"
                     f"📅 Sana: {ish['sana']}\n"
-                    f"{holat_emoji} Holat: {ish['holat']}",
-                    reply_markup=main_keyboard())
+                    f"{holat_emoji} Holat: {ish['holat']}")
                 qr_buf = qr_yaratish(ish)
                 send_photo_and_save(message.chat.id, qr_buf, caption=f"🔲 ID {ish['id']} uchun QR kod")
+                send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
             else:
                 send_and_save(message.chat.id, f"❌ ID {mid} topilmadi.", reply_markup=main_keyboard())
         except:
@@ -511,10 +506,10 @@ def handle_steps(message):
                             f"📞 Tel: {ish.get('telefon', '-')}\n"
                             f"💰 Narx: {ish['narx']} so'm\n"
                             f"📅 Qabul: {ish['sana']}\n"
-                            f"✅ Yakunlandi: {ish['yakunlangan_sana']}",
-                            reply_markup=main_keyboard())
+                            f"✅ Yakunlandi: {ish['yakunlangan_sana']}")
                         qr_buf = qr_yaratish(ish)
                         send_photo_and_save(message.chat.id, qr_buf, caption=f"🔲 ID {ish['id']} — Yakunlandi ✅")
+                        send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
                     topildi = True
                     break
             if not topildi:
@@ -558,7 +553,7 @@ def handle_steps(message):
                 send_excel_report(message, ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
             else:
                 matn = hisobot_yaratish(ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
-                send_and_save(message.chat.id, matn, reply_markup=hisobot_keyboard())
+                send_and_save(message.chat.id, matn, reply_markup=main_keyboard())
             del user_states[uid]
         except:
             send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 31.05.2025")
@@ -609,11 +604,11 @@ def handle_steps(message):
             f"📅 Sana: {yangi_ish_data['sana']}\n"
             f"⏳ Holat: Jarayonda\n"
             f"━━━━━━━━━━━━━━━━\n"
-            f"📌 Mijozga bering: ID {yangi_id}",
-            reply_markup=main_keyboard())
+            f"📌 Mijozga bering: ID {yangi_id}")
 
         qr_buf = qr_yaratish(yangi_ish_data)
         send_photo_and_save(message.chat.id, qr_buf, caption=f"🔲 Mijozga beriladigan QR kod\nID: {yangi_id}")
+        send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
 
     elif bosqich == "hisobot_menu":
         pass
