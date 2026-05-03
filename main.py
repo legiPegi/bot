@@ -6,6 +6,8 @@ import qrcode
 import io
 from datetime import datetime, timedelta
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
@@ -59,6 +61,80 @@ def qr_yaratish(ish):
     buf.seek(0)
     return buf
 
+# ===== EXCEL HISOBOT YARATISH (YANGI) =====
+def excel_hisobot_yaratish(ishlar, sarlavha):
+    """Ishlar ro'yxatidan Excel fayl yaratish"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Hisobot"
+    
+    # Stil tanlovlari
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+    
+    # Sarlavha qatori
+    headers = ['ID', 'Blok nomi', 'Mijoz ismi', 'Telefon', 'Narx (so\'m)', 'Qabul sanasi', 'Holat', 'Yakunlangan sana']
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = thin_border
+    
+    # Ma'lumotlarni to'ldirish
+    row_num = 2
+    for ish in ishlar:
+        # Holatga qarab qator rangi
+        row_fill = None
+        if ish['holat'] == 'Yakunlandi':
+            row_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # Yashil
+        elif ish['holat'] == 'Jarayonda':
+            row_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")  # Sariq
+        
+        # Ma'lumotlar
+        ws.cell(row=row_num, column=1, value=ish['id'])
+        ws.cell(row=row_num, column=2, value=ish['blok_nomi'])
+        ws.cell(row=row_num, column=3, value=ish['mijoz_ismi'])
+        ws.cell(row=row_num, column=4, value=ish.get('telefon', '-'))
+        ws.cell(row=row_num, column=5, value=ish['narx'])
+        ws.cell(row=row_num, column=6, value=ish['sana'])
+        ws.cell(row=row_num, column=7, value=ish['holat'])
+        ws.cell(row=row_num, column=8, value=ish.get('yakunlangan_sana', '-'))
+        
+        # Rang va chegara qo'shish
+        for col in range(1, 9):
+            cell = ws.cell(row=row_num, column=col)
+            cell.border = thin_border
+            if row_fill:
+                cell.fill = row_fill
+            if col == 5:  # Narx ustuni (o'ngga tekislash)
+                cell.alignment = Alignment(horizontal='right')
+        
+        row_num += 1
+    
+    # Ustunlarni avtomat kengaytirish
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 30)
+        ws.column_dimensions[col_letter].width = adjusted_width
+    
+    # Faylni xotiraga saqlash
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
 # ===== KLAVIATURA =====
 def main_keyboard():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -73,6 +149,7 @@ def hisobot_keyboard():
     kb.add(KeyboardButton("📅 Bugungi hisobot"))
     kb.add(KeyboardButton("📆 Haftalik hisobot"), KeyboardButton("🗓 10 kunlik hisobot"))
     kb.add(KeyboardButton("📝 Oylik hisobot"), KeyboardButton("✏️ Sana kiritish"))
+    kb.add(KeyboardButton("📎 Excel yuklab olish"))  # YANGI
     kb.add(KeyboardButton("🔙 Orqaga"))
     return kb
 
@@ -217,34 +294,73 @@ def hisobot_menu(message):
 def orqaga(message):
     bot.send_message(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
 
+# ===== YANGI: EXCEL YUKLAB OLISH =====
+@bot.message_handler(func=lambda m: m.text == "📎 Excel yuklab olish")
+def excel_yuklab_olish(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    user_states[message.from_user.id] = {"bosqich": "excel_hisobot"}
+    bot.send_message(message.chat.id, "📊 Excel hisobot turini tanlang:", reply_markup=hisobot_keyboard())
+
+def send_excel_report(message, ishlar, sarlavha):
+    if not ishlar:
+        bot.send_message(message.chat.id, f"📭 {sarlavha} uchun ma'lumot topilmadi.", reply_markup=hisobot_keyboard())
+        return
+    excel_file = excel_hisobot_yaratish(ishlar, sarlavha)
+    bot.send_document(message.chat.id, excel_file, 
+                      document_name=f"hisobot_{sarlavha.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                      caption=f"📊 {sarlavha} - {len(ishlar)} ta ish",
+                      reply_markup=hisobot_keyboard())
+
 @bot.message_handler(func=lambda m: m.text == "📅 Bugungi hisobot")
 def bugungi(message):
     data = load_data()
     bosh = datetime.now().replace(hour=0, minute=0, second=0)
     ishlar = ishlar_sanada(data["ishlar"], bosh, datetime.now())
-    bot.send_message(message.chat.id, hisobot_yaratish(ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})"), reply_markup=hisobot_keyboard())
+    
+    # Tekshirish: Excel yoki matn?
+    if user_states.get(message.from_user.id, {}).get("bosqich") == "excel_hisobot":
+        send_excel_report(message, ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})")
+        del user_states[message.from_user.id]
+    else:
+        bot.send_message(message.chat.id, hisobot_yaratish(ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})"), reply_markup=hisobot_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📆 Haftalik hisobot")
 def haftalik(message):
     data = load_data()
     ishlar = ishlar_sanada(data["ishlar"], datetime.now() - timedelta(days=7), datetime.now())
-    bot.send_message(message.chat.id, hisobot_yaratish(ishlar, "Haftalik hisobot (7 kun)"), reply_markup=hisobot_keyboard())
+    
+    if user_states.get(message.from_user.id, {}).get("bosqich") == "excel_hisobot":
+        send_excel_report(message, ishlar, "Haftalik hisobot (7 kun)")
+        del user_states[message.from_user.id]
+    else:
+        bot.send_message(message.chat.id, hisobot_yaratish(ishlar, "Haftalik hisobot (7 kun)"), reply_markup=hisobot_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "🗓 10 kunlik hisobot")
 def o_nkunlik(message):
     data = load_data()
     ishlar = ishlar_sanada(data["ishlar"], datetime.now() - timedelta(days=10), datetime.now())
-    bot.send_message(message.chat.id, hisobot_yaratish(ishlar, "10 kunlik hisobot"), reply_markup=hisobot_keyboard())
+    
+    if user_states.get(message.from_user.id, {}).get("bosqich") == "excel_hisobot":
+        send_excel_report(message, ishlar, "10 kunlik hisobot")
+        del user_states[message.from_user.id]
+    else:
+        bot.send_message(message.chat.id, hisobot_yaratish(ishlar, "10 kunlik hisobot"), reply_markup=hisobot_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📝 Oylik hisobot")
 def oylik(message):
     data = load_data()
     ishlar = ishlar_sanada(data["ishlar"], datetime.now() - timedelta(days=30), datetime.now())
-    bot.send_message(message.chat.id, hisobot_yaratish(ishlar, "Oylik hisobot (30 kun)"), reply_markup=hisobot_keyboard())
+    
+    if user_states.get(message.from_user.id, {}).get("bosqich") == "excel_hisobot":
+        send_excel_report(message, ishlar, "Oylik hisobot (30 kun)")
+        del user_states[message.from_user.id]
+    else:
+        bot.send_message(message.chat.id, hisobot_yaratish(ishlar, "Oylik hisobot (30 kun)"), reply_markup=hisobot_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "✏️ Sana kiritish")
 def sana_kiritish(message):
-    user_states[message.from_user.id] = {"bosqich": "sana_bosh"}
+    user_states[message.from_user.id] = {"bosqich": "sana_bosh", "data": {}}
     bot.send_message(message.chat.id, "📅 Boshlanish sanasini kiriting:\nFormat: 01.05.2025")
 
 # ===== BOSQICHMA-BOSQICH =====
@@ -257,7 +373,11 @@ def handle_steps(message):
     bosqich = state["bosqich"]
     text = message.text.strip()
 
-    if bosqich == "qidirish":
+    if bosqich == "excel_hisobot":
+        # O'tkazib yuboriladi - tugmalar bilan ishlaydi
+        pass
+
+    elif bosqich == "qidirish":
         try:
             mid = int(text)
             data = load_data()
@@ -274,7 +394,6 @@ def handle_steps(message):
                     f"📅 Sana: {ish['sana']}\n"
                     f"{holat_emoji} Holat: {ish['holat']}",
                     reply_markup=main_keyboard())
-                # QR kod ham yuborish
                 qr_buf = qr_yaratish(ish)
                 bot.send_photo(message.chat.id, qr_buf, caption=f"🔲 ID {ish['id']} uchun QR kod")
             else:
@@ -346,8 +465,13 @@ def handle_steps(message):
             oxir = datetime.strptime(text, "%d.%m.%Y").replace(hour=23, minute=59)
             data = load_data()
             ishlar = ishlar_sanada(data["ishlar"], bosh, oxir)
-            matn = hisobot_yaratish(ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
-            bot.send_message(message.chat.id, matn, reply_markup=hisobot_keyboard())
+            
+            # Excel yoki matn?
+            if state.get("excel_mode"):
+                send_excel_report(message, ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
+            else:
+                matn = hisobot_yaratish(ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
+                bot.send_message(message.chat.id, matn, reply_markup=hisobot_keyboard())
             del user_states[uid]
         except:
             bot.send_message(message.chat.id, "⚠️ Format xato! Masalan: 31.05.2025")
@@ -401,7 +525,6 @@ def handle_steps(message):
             f"📌 Mijozga bering: ID {yangi_id}",
             reply_markup=main_keyboard())
 
-        # QR kod yuborish
         qr_buf = qr_yaratish(yangi_ish_data)
         bot.send_photo(message.chat.id, qr_buf,
             caption=f"🔲 Mijozga beriladigan QR kod\nID: {yangi_id}")
