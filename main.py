@@ -47,7 +47,7 @@ def save_data(data):
 def yangi_id_yaratish(data):
     ishlatilgan = set(data.get("ishlatilgan_idlar", []))
     while True:
-        yangi = random.randint(1, 9999999)
+        yangi = random.randint(1, 99999)
         if yangi not in ishlatilgan:
             ishlatilgan.add(yangi)
             data["ishlatilgan_idlar"] = list(ishlatilgan)
