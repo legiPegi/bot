@@ -4,6 +4,8 @@ import os
 import random
 import qrcode
 import io
+import threading
+import time
 from datetime import datetime, timedelta
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 import openpyxl
@@ -146,41 +148,11 @@ def hisobot_keyboard():
 
 user_states = {}
 
-# ===== XABARLARNI TAZALASH FUNKSIYASI =====
-def clear_previous_messages(chat_id, keep_last_n=0):
-    """Oldingi xabarlarni tozalash"""
-    try:
-        if chat_id in user_states and "message_ids" in user_states[chat_id]:
-            msg_ids = user_states[chat_id]["message_ids"]
-            # Agar keep_last_n > 0 bo'lsa, oxirgi n ta xabarni saqlaymiz
-            ids_to_delete = msg_ids[:-keep_last_n] if keep_last_n > 0 else msg_ids.copy()
-            for msg_id in ids_to_delete:
-                try:
-                    bot.delete_message(chat_id, msg_id)
-                except:
-                    pass
-            # Saqlangan xabarlarni yangilaymiz
-            if keep_last_n > 0:
-                user_states[chat_id]["message_ids"] = msg_ids[-keep_last_n:]
-            else:
-                user_states[chat_id]["message_ids"] = []
-    except:
-        pass
-
-def clear_specific_message(chat_id, message_id):
-    """Bitta xabarni o'chirish"""
-    try:
-        bot.delete_message(chat_id, message_id)
-        if chat_id in user_states and "message_ids" in user_states[chat_id]:
-            if message_id in user_states[chat_id]["message_ids"]:
-                user_states[chat_id]["message_ids"].remove(message_id)
-    except:
-        pass
-
+# ===== XABARLARNI BOSHQARISH =====
 def add_message_id(chat_id, message_id):
     """Xabar ID sini saqlash"""
     if chat_id not in user_states:
-        user_states[chat_id] = {}
+        user_states[chat_id] = {"message_ids": []}
     if "message_ids" not in user_states[chat_id]:
         user_states[chat_id]["message_ids"] = []
     user_states[chat_id]["message_ids"].append(message_id)
@@ -214,6 +186,30 @@ def send_document_and_save(chat_id, document, visible_file_name, caption=None, r
     except Exception as e:
         print(f"Fayl yuborish xatosi: {e}")
         return None
+
+def clear_previous_messages(chat_id):
+    """Oldingi xabarlarni tozalash"""
+    try:
+        if chat_id in user_states and "message_ids" in user_states[chat_id]:
+            msg_ids = user_states[chat_id]["message_ids"].copy()
+            for msg_id in msg_ids:
+                try:
+                    bot.delete_message(chat_id, msg_id)
+                except:
+                    pass
+            user_states[chat_id]["message_ids"] = []
+    except Exception as e:
+        print(f"Xabarlarni tozalashda xatolik: {e}")
+
+def delete_message_after_delay(chat_id, message_id, delay=3):
+    """Xabarni kechikish bilan o'chirish"""
+    def delete_msg():
+        time.sleep(delay)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except:
+            pass
+    threading.Thread(target=delete_msg, daemon=True).start()
 
 # ===== HISOBOT =====
 def hisobot_yaratish(ishlar, sarlavha):
@@ -257,30 +253,38 @@ def ishlar_sanada(ishlar, bosh, oxir):
             pass
     return natija
 
-def send_excel_report(message, ishlar, sarlavha):
+def send_excel_report(chat_id, ishlar, sarlavha):
     """Excel faylni yuborish"""
     if not ishlar:
-        send_and_save(message.chat.id, f"📭 {sarlavha} uchun ma'lumot topilmadi.", reply_markup=main_keyboard())
+        msg = send_and_save(chat_id, f"📭 {sarlavha} uchun ma'lumot topilmadi.")
+        delete_message_after_delay(chat_id, msg.message_id, 3)
+        show_main_menu(chat_id)
         return
     try:
         excel_file = excel_hisobot_yaratish(ishlar, sarlavha)
         send_document_and_save(
-            message.chat.id, 
+            chat_id, 
             excel_file, 
             visible_file_name=f"hisobot_{sarlavha.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            caption=f"📊 {sarlavha} - {len(ishlar)} ta ish",
-            reply_markup=main_keyboard()
+            caption=f"📊 {sarlavha} - {len(ishlar)} ta ish"
         )
+        show_main_menu(chat_id)
     except Exception as e:
-        send_and_save(message.chat.id, f"❌ Excel fayl yaratishda xatolik: {str(e)}", reply_markup=main_keyboard())
+        msg = send_and_save(chat_id, f"❌ Excel fayl yaratishda xatolik: {str(e)}")
+        delete_message_after_delay(chat_id, msg.message_id, 3)
+        show_main_menu(chat_id)
+
+def show_main_menu(chat_id):
+    """Asosiy menyuni ko'rsatish"""
+    send_and_save(chat_id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
 
 # ===== /start =====
 @bot.message_handler(commands=["start"])
 def start(message):
     if message.from_user.id == ADMIN_ID:
-        # Faqat asosiy menyuni tozalaymiz, lekin /start xabarini o'chirmaymiz
+        clear_previous_messages(message.chat.id)
         if message.chat.id in user_states:
-            clear_previous_messages(message.chat.id)
+            user_states[message.chat.id] = {"message_ids": []}
         send_and_save(message.chat.id,
             "👋 Xush kelibsiz!\n\n"
             "🔧 Mator blok shilish xizmati\n"
@@ -306,7 +310,9 @@ def barcha_ishlar(message):
     clear_previous_messages(message.chat.id)
     data = load_data()
     if not data["ishlar"]:
-        send_and_save(message.chat.id, "📭 Hozircha ish yo'q.", reply_markup=main_keyboard())
+        msg = send_and_save(message.chat.id, "📭 Hozircha ish yo'q.")
+        delete_message_after_delay(message.chat.id, msg.message_id, 3)
+        show_main_menu(message.chat.id)
         return
     send_and_save(message.chat.id, f"📋 Jami: {len(data['ishlar'])} ta ish")
     for ish in data["ishlar"]:
@@ -319,6 +325,7 @@ def barcha_ishlar(message):
             f"💰 Narx: {ish['narx']} so'm\n"
             f"📅 Sana: {ish['sana']}\n"
             f"{holat_emoji} Holat: {ish['holat']}")
+    show_main_menu(message.chat.id)
 
 # ===== JARAYONDAGI ISHLAR =====
 @bot.message_handler(func=lambda m: m.text == "⏳ Jarayondagi ishlar")
@@ -329,7 +336,9 @@ def jarayondagi_ishlar(message):
     data = load_data()
     jarayon = [i for i in data["ishlar"] if i["holat"] == "Jarayonda"]
     if not jarayon:
-        send_and_save(message.chat.id, "✅ Jarayondagi ish yo'q.", reply_markup=main_keyboard())
+        msg = send_and_save(message.chat.id, "✅ Jarayondagi ish yo'q.")
+        delete_message_after_delay(message.chat.id, msg.message_id, 3)
+        show_main_menu(message.chat.id)
         return
     send_and_save(message.chat.id, f"⏳ Jarayondagi ishlar: {len(jarayon)} ta")
     for ish in jarayon:
@@ -341,7 +350,7 @@ def jarayondagi_ishlar(message):
             f"💰 Narx: {ish['narx']} so'm\n"
             f"📅 Sana: {ish['sana']}\n"
             f"⏳ Holat: Jarayonda")
-    send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
+    show_main_menu(message.chat.id)
 
 # ===== ID BO'YICHA QIDIRISH =====
 @bot.message_handler(func=lambda m: m.text == "🔍 ID bo'yicha qidirish")
@@ -376,15 +385,17 @@ def hisobot_menu(message):
     if message.from_user.id != ADMIN_ID:
         return
     clear_previous_messages(message.chat.id)
-    user_states[message.from_user.id] = {"bosqich": "hisobot_menu", "message_ids": []}
+    user_states[message.from_user.id] = {"bosqich": "hisobot_menu", "excel_mode": False, "message_ids": []}
     send_and_save(message.chat.id, "📊 Hisobot turini tanlang:", reply_markup=hisobot_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Orqaga")
 def orqaga(message):
+    if message.from_user.id != ADMIN_ID:
+        return
     clear_previous_messages(message.chat.id)
     if message.from_user.id in user_states:
         del user_states[message.from_user.id]
-    send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
+    show_main_menu(message.chat.id)
 
 # ===== EXCEL YUKLAB OLISH =====
 @bot.message_handler(func=lambda m: m.text == "📎 Excel yuklab olish")
@@ -392,72 +403,90 @@ def excel_yuklab_olish(message):
     if message.from_user.id != ADMIN_ID:
         return
     clear_previous_messages(message.chat.id)
-    user_states[message.from_user.id] = {"bosqich": "excel_hisobot", "excel_mode": True, "message_ids": []}
+    user_states[message.from_user.id] = {"bosqich": "hisobot_menu", "excel_mode": True, "message_ids": []}
     send_and_save(message.chat.id, "📊 Qaysi hisobotni Excelda yuklamoqchisiz?", reply_markup=hisobot_keyboard())
 
 # ===== HISOBOT TUGMALARI =====
 @bot.message_handler(func=lambda m: m.text == "📅 Bugungi hisobot")
 def bugungi(message):
+    if message.from_user.id != ADMIN_ID:
+        return
     clear_previous_messages(message.chat.id)
     data = load_data()
     bosh = datetime.now().replace(hour=0, minute=0, second=0)
     ishlar = ishlar_sanada(data["ishlar"], bosh, datetime.now())
     
-    state = user_states.get(message.from_user.id)
-    if state and state.get("excel_mode"):
-        send_excel_report(message, ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})")
+    state = user_states.get(message.from_user.id, {})
+    if state.get("excel_mode"):
+        send_excel_report(message.chat.id, ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})")
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})"), reply_markup=main_keyboard())
+        msg = send_and_save(message.chat.id, hisobot_yaratish(ishlar, f"Bugungi hisobot ({datetime.now().strftime('%d.%m.%Y')})"))
+        delete_message_after_delay(message.chat.id, msg.message_id, 5)
+        show_main_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "📆 Haftalik hisobot")
 def haftalik(message):
+    if message.from_user.id != ADMIN_ID:
+        return
     clear_previous_messages(message.chat.id)
     data = load_data()
     ishlar = ishlar_sanada(data["ishlar"], datetime.now() - timedelta(days=7), datetime.now())
     
-    state = user_states.get(message.from_user.id)
-    if state and state.get("excel_mode"):
-        send_excel_report(message, ishlar, "Haftalik hisobot (7 kun)")
+    state = user_states.get(message.from_user.id, {})
+    if state.get("excel_mode"):
+        send_excel_report(message.chat.id, ishlar, "Haftalik hisobot (7 kun)")
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Haftalik hisobot (7 kun)"), reply_markup=main_keyboard())
+        msg = send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Haftalik hisobot (7 kun)"))
+        delete_message_after_delay(message.chat.id, msg.message_id, 5)
+        show_main_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "🗓 10 kunlik hisobot")
 def o_nkunlik(message):
+    if message.from_user.id != ADMIN_ID:
+        return
     clear_previous_messages(message.chat.id)
     data = load_data()
     ishlar = ishlar_sanada(data["ishlar"], datetime.now() - timedelta(days=10), datetime.now())
     
-    state = user_states.get(message.from_user.id)
-    if state and state.get("excel_mode"):
-        send_excel_report(message, ishlar, "10 kunlik hisobot")
+    state = user_states.get(message.from_user.id, {})
+    if state.get("excel_mode"):
+        send_excel_report(message.chat.id, ishlar, "10 kunlik hisobot")
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "10 kunlik hisobot"), reply_markup=main_keyboard())
+        msg = send_and_save(message.chat.id, hisobot_yaratish(ishlar, "10 kunlik hisobot"))
+        delete_message_after_delay(message.chat.id, msg.message_id, 5)
+        show_main_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "📝 Oylik hisobot")
 def oylik(message):
+    if message.from_user.id != ADMIN_ID:
+        return
     clear_previous_messages(message.chat.id)
     data = load_data()
     ishlar = ishlar_sanada(data["ishlar"], datetime.now() - timedelta(days=30), datetime.now())
     
-    state = user_states.get(message.from_user.id)
-    if state and state.get("excel_mode"):
-        send_excel_report(message, ishlar, "Oylik hisobot (30 kun)")
+    state = user_states.get(message.from_user.id, {})
+    if state.get("excel_mode"):
+        send_excel_report(message.chat.id, ishlar, "Oylik hisobot (30 kun)")
         if message.from_user.id in user_states:
             del user_states[message.from_user.id]
     else:
-        send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Oylik hisobot (30 kun)"), reply_markup=main_keyboard())
+        msg = send_and_save(message.chat.id, hisobot_yaratish(ishlar, "Oylik hisobot (30 kun)"))
+        delete_message_after_delay(message.chat.id, msg.message_id, 5)
+        show_main_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "✏️ Sana kiritish")
 def sana_kiritish(message):
+    if message.from_user.id != ADMIN_ID:
+        return
     clear_previous_messages(message.chat.id)
-    state = user_states.get(message.from_user.id)
-    excel_mode = state.get("excel_mode", False) if state else False
+    state = user_states.get(message.from_user.id, {})
+    excel_mode = state.get("excel_mode", False)
     
     user_states[message.from_user.id] = {
         "bosqich": "sana_bosh", 
@@ -474,7 +503,9 @@ def handle_steps(message):
     state = user_states.get(uid)
     if not state:
         return
-    bosqich = state["bosqich"]
+    bosqich = state.get("bosqich")
+    if not bosqich:
+        return
     text = message.text.strip()
 
     if bosqich == "qidirish":
@@ -495,41 +526,47 @@ def handle_steps(message):
                     f"{holat_emoji} Holat: {ish['holat']}")
                 qr_buf = qr_yaratish(ish)
                 send_photo_and_save(message.chat.id, qr_buf, caption=f"🔲 ID {ish['id']} uchun QR kod")
-                send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
+                show_main_menu(message.chat.id)
+                del user_states[uid]
             else:
-                send_and_save(message.chat.id, f"❌ ID {mid} topilmadi.", reply_markup=main_keyboard())
+                msg = send_and_save(message.chat.id, f"❌ ID {mid} topilmadi.")
+                try:
+                    bot.delete_message(message.chat.id, message.message_id)
+                except:
+                    pass
+                delete_message_after_delay(message.chat.id, msg.message_id, 3)
+                return
         except:
-            send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!", reply_markup=main_keyboard())
-        del user_states[uid]
+            msg = send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!")
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+            except:
+                pass
+            delete_message_after_delay(message.chat.id, msg.message_id, 3)
+            return
 
     elif bosqich == "yakunlash":
         try:
             mid = int(text)
             data = load_data()
             topildi = False
-            # Foydalanuvchi yozgan xabar ID sini olish
-            user_msg_id = message.message_id
             for ish in data["ishlar"]:
                 if ish["id"] == mid:
                     if ish["holat"] == "Yakunlandi":
-                        msg = send_and_save(message.chat.id, f"ℹ️ ID {mid} allaqachon yakunlangan.", reply_markup=main_keyboard())
-                        clear_specific_message(message.chat.id, user_msg_id)  # Foydalanuvchi yozgan xabarni o'chirish
-                        # 3 sekunddan keyin xabarni o'chirish
-                        import threading
-                        def delete_after():
-                            import time
-                            time.sleep(3)
-                            try:
-                                bot.delete_message(message.chat.id, msg.message_id)
-                            except:
-                                pass
-                        threading.Thread(target=delete_after).start()
+                        msg = send_and_save(message.chat.id, f"ℹ️ ID {mid} allaqachon yakunlangan.")
+                        try:
+                            bot.delete_message(message.chat.id, message.message_id)
+                        except:
+                            pass
+                        delete_message_after_delay(message.chat.id, msg.message_id, 3)
                     else:
                         ish["holat"] = "Yakunlandi"
                         ish["yakunlangan_sana"] = datetime.now().strftime("%d.%m.%Y %H:%M")
                         save_data(data)
-                        # Foydalanuvchi yozgan xabarni o'chirish
-                        clear_specific_message(message.chat.id, user_msg_id)
+                        try:
+                            bot.delete_message(message.chat.id, message.message_id)
+                        except:
+                            pass
                         send_and_save(message.chat.id,
                             f"✅ Ish yakunlandi!\n\n"
                             f"🆔 ID: {ish['id']}\n"
@@ -541,40 +578,26 @@ def handle_steps(message):
                             f"✅ Yakunlandi: {ish['yakunlangan_sana']}")
                         qr_buf = qr_yaratish(ish)
                         send_photo_and_save(message.chat.id, qr_buf, caption=f"🔲 ID {ish['id']} — Yakunlandi ✅")
-                        send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
+                        show_main_menu(message.chat.id)
                     topildi = True
                     break
             if not topildi:
-                # ID topilmadi - xatolik xabarini yuborib, 2 sekunddan keyin o'chiramiz
-                error_msg = send_and_save(message.chat.id, f"❌ ID {mid} topilmadi. Iltimos, qaytadan ID kiriting:")
-                clear_specific_message(message.chat.id, user_msg_id)
-                # Yangi ID so'rash holatini qayta o'rnatish
-                import threading
-                def retry_delete():
-                    import time
-                    time.sleep(3)
-                    try:
-                        bot.delete_message(message.chat.id, error_msg.message_id)
-                    except:
-                        pass
-                threading.Thread(target=retry_delete).start()
-                return  # Holatni o'chirmaymiz, qayta ID so'raymiz
-        except:
-            user_msg_id = message.message_id
-            error_msg = send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting! Iltimos, ID raqamini kiriting:")
-            clear_specific_message(message.chat.id, user_msg_id)
-            import threading
-            def delete_after():
-                import time
-                time.sleep(3)
+                msg = send_and_save(message.chat.id, f"❌ ID {mid} topilmadi. Qaytadan urining:")
                 try:
-                    bot.delete_message(message.chat.id, error_msg.message_id)
+                    bot.delete_message(message.chat.id, message.message_id)
                 except:
                     pass
-            threading.Thread(target=delete_after).start()
+                delete_message_after_delay(message.chat.id, msg.message_id, 3)
+                return
+            del user_states[uid]
+        except:
+            msg = send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!")
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+            except:
+                pass
+            delete_message_after_delay(message.chat.id, msg.message_id, 3)
             return
-        
-        del user_states[uid]
 
     elif bosqich == "ochirish":
         try:
@@ -584,12 +607,19 @@ def handle_steps(message):
             data["ishlar"] = [i for i in data["ishlar"] if i["id"] != mid]
             if len(data["ishlar"]) < oldin:
                 save_data(data)
-                send_and_save(message.chat.id, f"✅ ID {mid} o'chirildi.", reply_markup=main_keyboard())
+                msg = send_and_save(message.chat.id, f"✅ ID {mid} o'chirildi.")
+                delete_message_after_delay(message.chat.id, msg.message_id, 3)
+                show_main_menu(message.chat.id)
             else:
-                send_and_save(message.chat.id, f"❌ ID {mid} topilmadi.", reply_markup=main_keyboard())
+                msg = send_and_save(message.chat.id, f"❌ ID {mid} topilmadi.")
+                delete_message_after_delay(message.chat.id, msg.message_id, 3)
+                show_main_menu(message.chat.id)
+            del user_states[uid]
         except:
-            send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!", reply_markup=main_keyboard())
-        del user_states[uid]
+            msg = send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!")
+            delete_message_after_delay(message.chat.id, msg.message_id, 3)
+            show_main_menu(message.chat.id)
+            del user_states[uid]
 
     elif bosqich == "sana_bosh":
         try:
@@ -598,7 +628,8 @@ def handle_steps(message):
             state["bosqich"] = "sana_oxir"
             send_and_save(message.chat.id, "📅 Tugash sanasini kiriting:\nFormat: 31.05.2025")
         except:
-            send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 01.05.2025")
+            msg = send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 01.05.2025")
+            delete_message_after_delay(message.chat.id, msg.message_id, 3)
 
     elif bosqich == "sana_oxir":
         try:
@@ -608,13 +639,15 @@ def handle_steps(message):
             ishlar = ishlar_sanada(data["ishlar"], bosh, oxir)
             
             if state.get("excel_mode"):
-                send_excel_report(message, ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
+                send_excel_report(message.chat.id, ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
             else:
-                matn = hisobot_yaratish(ishlar, f"Hisobot: {state['data']['bosh']} — {text}")
-                send_and_save(message.chat.id, matn, reply_markup=main_keyboard())
+                msg = send_and_save(message.chat.id, hisobot_yaratish(ishlar, f"Hisobot: {state['data']['bosh']} — {text}"))
+                delete_message_after_delay(message.chat.id, msg.message_id, 5)
+                show_main_menu(message.chat.id)
             del user_states[uid]
         except:
-            send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 31.05.2025")
+            msg = send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 31.05.2025")
+            delete_message_after_delay(message.chat.id, msg.message_id, 3)
 
     elif bosqich == "blok_nomi":
         state["data"]["blok_nomi"] = text
@@ -666,12 +699,9 @@ def handle_steps(message):
 
         qr_buf = qr_yaratish(yangi_ish_data)
         send_photo_and_save(message.chat.id, qr_buf, caption=f"🔲 Mijozga beriladigan QR kod\nID: {yangi_id}")
-        send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
+        show_main_menu(message.chat.id)
 
     elif bosqich == "hisobot_menu":
-        pass
-
-    elif bosqich == "excel_hisobot":
         pass
 
 # ===== BOTNI ISHGA TUSHIRISH =====
