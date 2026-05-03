@@ -657,4 +657,24 @@ def handle_steps(message):
             f"🆔 ID: {yangi_id}\n"
             f"🔧 Blok: {yangi_ish_data['blok_nomi']}\n"
             f"👤 Mijoz: {yangi_ish_data['mijoz_ismi']}\n"
-            f"📞 Tel: {yangi_ish_data['telefon']
+            f"📞 Tel: {yangi_ish_data['telefon']}\n"
+            f"💰 Narx: {yangi_ish_data['narx']} so'm\n"
+            f"📅 Sana: {yangi_ish_data['sana']}\n"
+            f"⏳ Holat: Jarayonda\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"📌 Mijozga bering: ID {yangi_id}")
+
+        qr_buf = qr_yaratish(yangi_ish_data)
+        send_photo_and_save(message.chat.id, qr_buf, caption=f"🔲 Mijozga beriladigan QR kod\nID: {yangi_id}")
+        send_and_save(message.chat.id, "🏠 Asosiy menyu:", reply_markup=main_keyboard())
+
+    elif bosqich == "hisobot_menu":
+        pass
+
+    elif bosqich == "excel_hisobot":
+        pass
+
+# ===== BOTNI ISHGA TUSHIRISH =====
+if __name__ == "__main__":
+    print("Bot ishga tushdi...")
+    bot.infinity_polling()
