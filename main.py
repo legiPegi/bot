@@ -7,7 +7,7 @@ import io
 import threading
 import time
 from datetime import datetime, timedelta
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -129,47 +129,47 @@ def hisobot_keyboard():
     kb.add(KeyboardButton("🔙 Orqaga"))
     return kb
 
-# Orqaga qaytish uchun alohida klaviatura
 def back_keyboard():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton("🔙 Bekor qilish"))
     return kb
 
 user_states = {}
+all_message_ids = {}  # Barcha xabarlarni kuzatish uchun
 
 # ===== XABARLARNI BOSHQARISH =====
-def add_message_id(chat_id, message_id):
-    if chat_id not in user_states:
-        user_states[chat_id] = {"message_ids": [], "hisobot_mode": False, "temp_ids": []}
-    if "message_ids" not in user_states[chat_id]:
-        user_states[chat_id]["message_ids"] = []
-    user_states[chat_id]["message_ids"].append(message_id)
+def track_message(chat_id, message_id):
+    """Barcha xabarlarni kuzatish - ham bot, ham foydalanuvchi xabarlari"""
+    if chat_id not in all_message_ids:
+        all_message_ids[chat_id] = []
+    all_message_ids[chat_id].append(message_id)
 
-def add_temp_id(chat_id, message_id):
-    """Vaqtinchalik xabarlar ID sini saqlash"""
+def add_message_id(chat_id, message_id):
+    """Bot yuborgan xabarlarni saqlash"""
     if chat_id not in user_states:
-        user_states[chat_id] = {"message_ids": [], "hisobot_mode": False, "temp_ids": []}
-    if "temp_ids" not in user_states[chat_id]:
-        user_states[chat_id]["temp_ids"] = []
-    user_states[chat_id]["temp_ids"].append(message_id)
+        user_states[chat_id] = {"bot_message_ids": [], "hisobot_mode": False, "user_message_ids": []}
+    if "bot_message_ids" not in user_states[chat_id]:
+        user_states[chat_id]["bot_message_ids"] = []
+    user_states[chat_id]["bot_message_ids"].append(message_id)
+    track_message(chat_id, message_id)
+
+def add_user_message_id(chat_id, message_id):
+    """Foydalanuvchi yuborgan xabarlarni saqlash"""
+    if chat_id not in user_states:
+        user_states[chat_id] = {"bot_message_ids": [], "hisobot_mode": False, "user_message_ids": []}
+    if "user_message_ids" not in user_states[chat_id]:
+        user_states[chat_id]["user_message_ids"] = []
+    user_states[chat_id]["user_message_ids"].append(message_id)
+    track_message(chat_id, message_id)
 
 def send_and_save(chat_id, text, reply_markup=None, parse_mode=None):
+    """Xabar yuborish va ID sini saqlash"""
     try:
         msg = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
         add_message_id(chat_id, msg.message_id)
         return msg
     except Exception as e:
         print(f"Xabar yuborish xatosi: {e}")
-        return None
-
-def send_temp_message(chat_id, text, reply_markup=None):
-    """Vaqtinchalik xabar yuborish (keyin o'chiriladi)"""
-    try:
-        msg = bot.send_message(chat_id, text, reply_markup=reply_markup)
-        add_temp_id(chat_id, msg.message_id)
-        return msg
-    except Exception as e:
-        print(f"Vaqtinchalik xabar yuborish xatosi: {e}")
         return None
 
 def send_photo_and_save(chat_id, photo, caption=None, reply_markup=None):
@@ -190,76 +190,54 @@ def send_document_and_save(chat_id, document, visible_file_name, caption=None, r
         print(f"Fayl yuborish xatosi: {e}")
         return None
 
-def delete_temp_messages(chat_id):
-    """Vaqtinchalik xabarlarni o'chirish"""
-    if chat_id in user_states and "temp_ids" in user_states[chat_id]:
-        temp_ids = user_states[chat_id]["temp_ids"].copy()
-        user_states[chat_id]["temp_ids"] = []
-        for msg_id in temp_ids:
-            try:
-                bot.delete_message(chat_id, msg_id)
-                time.sleep(0.03)
-            except:
-                pass
+def delete_message_safe(chat_id, message_id):
+    """Xabarni xavfsiz o'chirish"""
+    try:
+        bot.delete_message(chat_id, message_id)
+        return True
+    except:
+        return False
 
-def delete_messages_async(chat_id, message_ids):
-    if not message_ids:
+def delete_all_messages(chat_id, delay=0.05):
+    """Barcha kuzatilgan xabarlarni o'chirish"""
+    if chat_id not in all_message_ids:
         return
+    
+    message_ids = all_message_ids[chat_id].copy()
+    all_message_ids[chat_id] = []
+    
+    # Shuningdek, user_states dagi ro'yxatlarni ham tozalash
+    if chat_id in user_states:
+        if "bot_message_ids" in user_states[chat_id]:
+            user_states[chat_id]["bot_message_ids"] = []
+        if "user_message_ids" in user_states[chat_id]:
+            user_states[chat_id]["user_message_ids"] = []
+    
     def delete():
         for msg_id in message_ids:
-            try:
-                bot.delete_message(chat_id, msg_id)
-                time.sleep(0.03)
-            except:
-                pass
+            delete_message_safe(chat_id, msg_id)
+            time.sleep(delay)
+    
     threading.Thread(target=delete, daemon=True).start()
 
-def clear_chat_history(chat_id, keep_hisobot=False):
+def clear_chat(chat_id, keep_hisobot=False):
+    """Chatni tozalash - barcha xabarlarni o'chirish"""
     if chat_id not in user_states:
         return
     
     state = user_states[chat_id]
     
+    # Hisobot rejimida tozalamaslik
     if keep_hisobot and state.get("hisobot_mode"):
         return
     
-    if "message_ids" in state and state["message_ids"]:
-        message_ids = state["message_ids"].copy()
-        state["message_ids"] = []
-        delete_messages_async(chat_id, message_ids)
-    
-    # Vaqtinchalik xabarlarni ham tozalash
-    if "temp_ids" in state and state["temp_ids"]:
-        temp_ids = state["temp_ids"].copy()
-        state["temp_ids"] = []
-        delete_messages_async(chat_id, temp_ids)
+    delete_all_messages(chat_id)
 
-def delete_message_later(chat_id, message_id, delay=0):
-    if delay > 0:
-        def delete():
-            time.sleep(delay)
-            try:
-                bot.delete_message(chat_id, message_id)
-            except:
-                pass
-        threading.Thread(target=delete, daemon=True).start()
-    else:
-        try:
-            bot.delete_message(chat_id, message_id)
-        except:
-            pass
-
-def delete_multiple_later(chat_id, message_ids, delay=3):
-    if not message_ids:
-        return
+def delete_user_message_later(chat_id, message_id, delay=0.5):
+    """Foydalanuvchi xabarini kechikish bilan o'chirish"""
     def delete():
         time.sleep(delay)
-        for msg_id in message_ids:
-            try:
-                bot.delete_message(chat_id, msg_id)
-                time.sleep(0.03)
-            except:
-                pass
+        delete_message_safe(chat_id, message_id)
     threading.Thread(target=delete, daemon=True).start()
 
 # ===== HISOBOT =====
@@ -308,7 +286,6 @@ def ishlar_sanada(ishlar, bosh, oxir):
 def show_main_menu(chat_id, text="🏠 Asosiy menyu:"):
     if chat_id in user_states:
         user_states[chat_id]["hisobot_mode"] = False
-    delete_temp_messages(chat_id)
     send_and_save(chat_id, text, reply_markup=main_keyboard())
 
 def show_hisobot_menu(chat_id):
@@ -323,9 +300,9 @@ def start(message):
         bot.send_message(message.chat.id, "⛔ Siz admin emassiz.")
         return
     
-    clear_chat_history(message.chat.id)
+    clear_chat(message.chat.id)
     if message.chat.id in user_states:
-        user_states[message.chat.id] = {"message_ids": [], "hisobot_mode": False, "temp_ids": []}
+        user_states[message.chat.id] = {"bot_message_ids": [], "user_message_ids": [], "hisobot_mode": False}
     
     send_and_save(message.chat.id,
         "👋 Xush kelibsiz!\n\n🔧 Mator blok shilish xizmati\nQuyidagi tugmalardan foydalaning:",
@@ -337,7 +314,9 @@ def is_admin(message):
 # ===== BEKOR QILISH =====
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "🔙 Bekor qilish")
 def bekor_qilish(message):
-    clear_chat_history(message.chat.id)
+    # Foydalanuvchi xabarini ham o'chirish
+    add_user_message_id(message.chat.id, message.message_id)
+    clear_chat(message.chat.id)
     if message.from_user.id in user_states:
         del user_states[message.from_user.id]
     show_main_menu(message.chat.id)
@@ -345,20 +324,26 @@ def bekor_qilish(message):
 # ===== ASOSIY MENYU HANDLERLARI =====
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "➕ Yangi ish qo'shish")
 def yangi_ish(message):
-    clear_chat_history(message.chat.id)
+    # Foydalanuvchi xabarini saqlash va o'chirish
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     user_states[message.from_user.id] = {
         "bosqich": "blok_nomi", 
         "data": {}, 
-        "message_ids": [], 
-        "temp_ids": [],
-        "hisobot_mode": False,
-        "original_menu": "main"
+        "bot_message_ids": [], 
+        "user_message_ids": [],
+        "hisobot_mode": False
     }
     send_and_save(message.chat.id, "🔧 Blok nomini kiriting:\n(masalan: Toyota Camry 2.4)", reply_markup=back_keyboard())
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "📋 Barcha ishlar")
 def barcha_ishlar(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     data = load_data()
     if not data["ishlar"]:
         send_and_save(message.chat.id, "📭 Hozircha ish yo'q.")
@@ -380,7 +365,10 @@ def barcha_ishlar(message):
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "⏳ Jarayondagi ishlar")
 def jarayondagi_ishlar(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     data = load_data()
     jarayon = [i for i in data["ishlar"] if i["holat"] == "Jarayonda"]
     if not jarayon:
@@ -397,74 +385,93 @@ def jarayondagi_ishlar(message):
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "🔍 ID bo'yicha qidirish")
 def qidirish_boshlash(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     user_states[message.from_user.id] = {
         "bosqich": "qidirish", 
-        "message_ids": [], 
-        "temp_ids": [],
+        "bot_message_ids": [], 
+        "user_message_ids": [],
         "hisobot_mode": False
     }
-    # Asosiy menyu bilan birga so'rash
     send_and_save(message.chat.id, "🔍 Ish ID sini kiriting (4 xonali raqam):", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "✅ Ishni yakunlash")
 def yakunlash_boshlash(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     user_states[message.from_user.id] = {
         "bosqich": "yakunlash", 
-        "message_ids": [], 
-        "temp_ids": [],
+        "bot_message_ids": [], 
+        "user_message_ids": [],
         "hisobot_mode": False
     }
-    # Asosiy menyu bilan birga so'rash
     send_and_save(message.chat.id, "✅ Yakunlanmoqchi bo'lgan ish ID sini kiriting:", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "🗑 Ishni o'chirish")
 def ochirish_boshlash(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     user_states[message.from_user.id] = {
         "bosqich": "ochirish", 
-        "message_ids": [], 
-        "temp_ids": [],
+        "bot_message_ids": [], 
+        "user_message_ids": [],
         "hisobot_mode": False
     }
-    # Asosiy menyu bilan birga so'rash
     send_and_save(message.chat.id, "🗑 O'chirmoqchi bo'lgan ish ID sini kiriting:", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "📊 Hisobot")
 def hisobot_menu(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     user_states[message.from_user.id] = {
         "bosqich": "hisobot_menu", 
         "excel_mode": False, 
-        "message_ids": [], 
-        "temp_ids": [],
+        "bot_message_ids": [], 
+        "user_message_ids": [],
         "hisobot_mode": True
     }
     show_hisobot_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "📎 Excel yuklab olish")
 def excel_yuklab_olish(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     user_states[message.from_user.id] = {
         "bosqich": "hisobot_menu", 
         "excel_mode": True, 
-        "message_ids": [], 
-        "temp_ids": [],
+        "bot_message_ids": [], 
+        "user_message_ids": [],
         "hisobot_mode": True
     }
     show_hisobot_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "🔙 Orqaga")
 def orqaga(message):
-    clear_chat_history(message.chat.id)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id)
     if message.from_user.id in user_states:
         del user_states[message.from_user.id]
     show_main_menu(message.chat.id)
 
 # ===== HISOBOT HANDLERLARI =====
 def handle_hisobot(message, days, nom):
-    clear_chat_history(message.chat.id, keep_hisobot=True)
+    # Foydalanuvchi xabarini o'chirish
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id, keep_hisobot=True)
     
     data = load_data()
     bosh = datetime.now() - timedelta(days=days)
@@ -505,7 +512,10 @@ def oylik(message):
 
 @bot.message_handler(func=lambda m: is_admin(m) and m.text == "✏️ Sana kiritish")
 def sana_kiritish(message):
-    clear_chat_history(message.chat.id, keep_hisobot=True)
+    add_user_message_id(message.chat.id, message.message_id)
+    delete_user_message_later(message.chat.id, message.message_id, 0.5)
+    
+    clear_chat(message.chat.id, keep_hisobot=True)
     state = user_states.get(message.from_user.id, {})
     excel_mode = state.get("excel_mode", False)
     
@@ -513,14 +523,23 @@ def sana_kiritish(message):
         "bosqich": "sana_bosh", 
         "data": {},
         "excel_mode": excel_mode,
-        "message_ids": [],
-        "temp_ids": [],
+        "bot_message_ids": [],
+        "user_message_ids": [],
         "hisobot_mode": True
     }
     send_and_save(message.chat.id, "📅 Boshlanish sanasini kiriting:\nFormat: 01.05.2025")
 
+# ===== BARCHA XABARLARNI KUZATISH =====
+@bot.message_handler(func=lambda m: True, content_types=['text'])
+def track_all_messages(message):
+    """Barcha matnli xabarlarni kuzatish"""
+    if message.from_user.id == ADMIN_ID:
+        add_user_message_id(message.chat.id, message.message_id)
+        # Agar bu holatdagi xabar bo'lsa, handle_steps ga o'tkazish
+        if message.from_user.id in user_states and "bosqich" in user_states.get(message.from_user.id, {}):
+            handle_steps(message)
+
 # ===== BOSQICHMA-BOSQICH =====
-@bot.message_handler(func=lambda m: m.from_user.id in user_states)
 def handle_steps(message):
     uid = message.from_user.id
     state = user_states.get(uid)
@@ -533,27 +552,22 @@ def handle_steps(message):
 
     # Agar foydalanuvchi "Bekor qilish" tugmasini bossa
     if text == "🔙 Bekor qilish":
-        clear_chat_history(message.chat.id)
+        delete_message_safe(message.chat.id, user_msg_id)
+        clear_chat(message.chat.id)
         del user_states[uid]
         show_main_menu(message.chat.id)
         return
 
     if bosqich == "qidirish":
-        # Avval eski vaqtinchalik xabarlarni o'chirish
-        delete_temp_messages(message.chat.id)
-        
         try:
             mid = int(text)
             data = load_data()
             ish = next((i for i in data["ishlar"] if i["id"] == mid), None)
             
+            # Foydalanuvchi kiritgan raqamni o'chirish
+            delete_message_safe(message.chat.id, user_msg_id)
+            
             if ish:
-                # Foydalanuvchi kiritgan raqamni o'chirish
-                try:
-                    bot.delete_message(message.chat.id, user_msg_id)
-                except:
-                    pass
-                
                 holat_emoji = "✅" if ish["holat"] == "Yakunlandi" else "⏳"
                 send_and_save(message.chat.id,
                     f"✅ Topildi!\n\n"
@@ -565,50 +579,42 @@ def handle_steps(message):
                 show_main_menu(message.chat.id)
                 del user_states[uid]
             else:
-                # ID topilmadi - vaqtinchalik xabar, menyu o'zgarmaydi
-                try:
-                    bot.delete_message(message.chat.id, user_msg_id)
-                except:
-                    pass
-                temp_msg = send_temp_message(message.chat.id, f"❌ ID {mid} topilmadi. Boshqa ID kiriting:")
-                delete_message_later(message.chat.id, temp_msg.message_id, 3)
-                # Holat saqlanadi, menyu o'zgarmaydi
+                # Vaqtinchalik xatolik xabari
+                temp_msg = send_and_save(message.chat.id, f"❌ ID {mid} topilmadi. Boshqa ID kiriting:", reply_markup=main_keyboard())
+                # 3 sekunddan keyin o'chirish
+                def delete_temp():
+                    time.sleep(3)
+                    delete_message_safe(message.chat.id, temp_msg.message_id)
+                threading.Thread(target=delete_temp, daemon=True).start()
                 return
         except:
-            try:
-                bot.delete_message(message.chat.id, user_msg_id)
-            except:
-                pass
-            temp_msg = send_temp_message(message.chat.id, "⚠️ Faqat raqam kiriting!")
-            delete_message_later(message.chat.id, temp_msg.message_id, 3)
+            delete_message_safe(message.chat.id, user_msg_id)
+            temp_msg = send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!", reply_markup=main_keyboard())
+            def delete_temp():
+                time.sleep(3)
+                delete_message_safe(message.chat.id, temp_msg.message_id)
+            threading.Thread(target=delete_temp, daemon=True).start()
             return
 
     elif bosqich == "yakunlash":
-        # Avval eski vaqtinchalik xabarlarni o'chirish
-        delete_temp_messages(message.chat.id)
-        
         try:
             mid = int(text)
             data = load_data()
             
+            delete_message_safe(message.chat.id, user_msg_id)
+            
             for ish in data["ishlar"]:
                 if ish["id"] == mid:
                     if ish["holat"] == "Yakunlandi":
-                        try:
-                            bot.delete_message(message.chat.id, user_msg_id)
-                        except:
-                            pass
-                        temp_msg = send_temp_message(message.chat.id, f"ℹ️ ID {mid} allaqachon yakunlangan.")
-                        delete_message_later(message.chat.id, temp_msg.message_id, 3)
+                        temp_msg = send_and_save(message.chat.id, f"ℹ️ ID {mid} allaqachon yakunlangan.", reply_markup=main_keyboard())
+                        def delete_temp():
+                            time.sleep(3)
+                            delete_message_safe(message.chat.id, temp_msg.message_id)
+                        threading.Thread(target=delete_temp, daemon=True).start()
                     else:
                         ish["holat"] = "Yakunlandi"
                         ish["yakunlangan_sana"] = datetime.now().strftime("%d.%m.%Y %H:%M")
                         save_data(data)
-                        
-                        try:
-                            bot.delete_message(message.chat.id, user_msg_id)
-                        except:
-                            pass
                         
                         send_and_save(message.chat.id,
                             f"✅ Ish yakunlandi!\n\n"
@@ -623,53 +629,49 @@ def handle_steps(message):
                     return
             
             # ID topilmadi
-            try:
-                bot.delete_message(message.chat.id, user_msg_id)
-            except:
-                pass
-            temp_msg = send_temp_message(message.chat.id, f"❌ ID {mid} topilmadi. Boshqa ID kiriting:")
-            delete_message_later(message.chat.id, temp_msg.message_id, 3)
+            temp_msg = send_and_save(message.chat.id, f"❌ ID {mid} topilmadi. Boshqa ID kiriting:", reply_markup=main_keyboard())
+            def delete_temp():
+                time.sleep(3)
+                delete_message_safe(message.chat.id, temp_msg.message_id)
+            threading.Thread(target=delete_temp, daemon=True).start()
             return
         except:
-            try:
-                bot.delete_message(message.chat.id, user_msg_id)
-            except:
-                pass
-            temp_msg = send_temp_message(message.chat.id, "⚠️ Faqat raqam kiriting!")
-            delete_message_later(message.chat.id, temp_msg.message_id, 3)
+            delete_message_safe(message.chat.id, user_msg_id)
+            temp_msg = send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!", reply_markup=main_keyboard())
+            def delete_temp():
+                time.sleep(3)
+                delete_message_safe(message.chat.id, temp_msg.message_id)
+            threading.Thread(target=delete_temp, daemon=True).start()
             return
 
     elif bosqich == "ochirish":
-        # Avval eski vaqtinchalik xabarlarni o'chirish
-        delete_temp_messages(message.chat.id)
-        
         try:
             mid = int(text)
             data = load_data()
             oldin = len(data["ishlar"])
             data["ishlar"] = [i for i in data["ishlar"] if i["id"] != mid]
             
-            try:
-                bot.delete_message(message.chat.id, user_msg_id)
-            except:
-                pass
+            delete_message_safe(message.chat.id, user_msg_id)
             
             if len(data["ishlar"]) < oldin:
                 save_data(data)
                 send_and_save(message.chat.id, f"✅ ID {mid} o'chirildi.")
             else:
-                temp_msg = send_temp_message(message.chat.id, f"❌ ID {mid} topilmadi.")
-                delete_message_later(message.chat.id, temp_msg.message_id, 3)
+                temp_msg = send_and_save(message.chat.id, f"❌ ID {mid} topilmadi.")
+                def delete_temp():
+                    time.sleep(3)
+                    delete_message_safe(message.chat.id, temp_msg.message_id)
+                threading.Thread(target=delete_temp, daemon=True).start()
             
             show_main_menu(message.chat.id)
             del user_states[uid]
         except:
-            try:
-                bot.delete_message(message.chat.id, user_msg_id)
-            except:
-                pass
-            temp_msg = send_temp_message(message.chat.id, "⚠️ Faqat raqam kiriting!")
-            delete_message_later(message.chat.id, temp_msg.message_id, 3)
+            delete_message_safe(message.chat.id, user_msg_id)
+            temp_msg = send_and_save(message.chat.id, "⚠️ Faqat raqam kiriting!")
+            def delete_temp():
+                time.sleep(3)
+                delete_message_safe(message.chat.id, temp_msg.message_id)
+            threading.Thread(target=delete_temp, daemon=True).start()
             show_main_menu(message.chat.id)
             del user_states[uid]
 
@@ -680,8 +682,11 @@ def handle_steps(message):
             state["bosqich"] = "sana_oxir"
             send_and_save(message.chat.id, "📅 Tugash sanasini kiriting:\nFormat: 31.05.2025")
         except:
-            temp_msg = send_temp_message(message.chat.id, "⚠️ Format xato! Masalan: 01.05.2025")
-            delete_message_later(message.chat.id, temp_msg.message_id, 3)
+            temp_msg = send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 01.05.2025")
+            def delete_temp():
+                time.sleep(3)
+                delete_message_safe(message.chat.id, temp_msg.message_id)
+            threading.Thread(target=delete_temp, daemon=True).start()
 
     elif bosqich == "sana_oxir":
         try:
@@ -705,8 +710,11 @@ def handle_steps(message):
             
             del user_states[uid]
         except:
-            temp_msg = send_temp_message(message.chat.id, "⚠️ Format xato! Masalan: 31.05.2025")
-            delete_message_later(message.chat.id, temp_msg.message_id, 3)
+            temp_msg = send_and_save(message.chat.id, "⚠️ Format xato! Masalan: 31.05.2025")
+            def delete_temp():
+                time.sleep(3)
+                delete_message_safe(message.chat.id, temp_msg.message_id)
+            threading.Thread(target=delete_temp, daemon=True).start()
 
     elif bosqich == "blok_nomi":
         state["data"]["blok_nomi"] = text
